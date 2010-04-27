@@ -1,0 +1,230 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+    "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html>
+  <head>
+    <title>Analytics</title>
+    <script type="text/javascript" src="http://www.google.com/jsapi"></script>
+    <script type="text/javascript" src="http://code.jquery.com/jquery.js"></script>
+    <style>
+      #control { width:60%; float:left; }
+      #log { width:35%; float:right; overflow:hidden; }
+      textarea { width:95%; height:200px; font-family:courier new; font-size:14px; }
+    </style>
+  </head>
+  <body>
+    <div id="control">
+      <button id="authButton">Loading...</button>
+      <select id="accounts" style="display:none"></select>
+      <p>
+        <label for="query">query</label><br />
+        <textarea id="query"></textarea>
+      </p>
+
+      <p>
+        <label for="filter">filter</label><br />
+        <textarea id="filter"></textarea>
+      </p>
+
+      <p>
+        <button id="update">Go!</button>
+      </p>
+
+      <p>
+        <label for="result">result</label><br />
+        <textarea id="result"></textarea>
+      </p>
+    </div>
+    <div id="log">
+    </div>
+
+    <img src="dummy.gif" style="display:none" alt="required for Google Data" />
+  </body>
+  <script>
+    google.load('gdata', '2', {packages: ['analytics']});
+    google.setOnLoadCallback(function() {
+      var service = new google.gdata.analytics.AnalyticsService('gaExportAPI_acctSample_v2.0'),
+        scope = 'https://www.google.com/analytics/feeds';
+      refreshView();
+
+      $('#authButton').click(function() {
+        if (!loggedIn()) logIn();
+        else logOut();
+        refreshView();
+      });
+
+      $('#update').click(function() {
+        $('#result').html('');
+        var query = $('#query').val(),
+          hash = queryHash(query),
+          uri = 'https://www.google.com/analytics/feeds/data?ids=' + $('#accounts').val() + '&' + $.param(hash),
+          iterator = iteratorCallback(function(row) {
+            var obj = {};
+            (hash.dimensions + ',' + hash.metrics).split(',').forEach(function(gaKey) {
+              var key = gaKey.split(':')[1];
+              obj[key] = row.getValueOf(gaKey);
+            });
+            return obj;
+          });
+        service.getDataFeed(uri, iterator, alertError);
+        var filter = $.trim($('#filter').val());
+        if (filter.length) iterator.onLoad(new Function("data", filter));
+        iterator.each(function(row, i) {
+          var str = JSON.stringify(row);
+          if (i == 0) {
+            $('#log').prepend([
+              '<div class="logItem">',
+                '<div class="name">', str, '</div>',
+                '<div class="date">', new Date(), '</div>',
+              '</div>'
+            ].join("\n"));
+            $('#log .logItem:first').click(function() {
+              $('#filter').html(filter);
+              $('#query').html(query);
+              $('#result').html('');
+            });
+            $('#log .date').prettyDate();
+          }
+          $('#result').append(i + ": " + str + "\n");
+        });
+      });
+
+      function queryHash(query) {
+        var pairs = query.split("\n"),
+          hash = {};
+        for (var i = 0, len = pairs.length; i < len; ++i) {
+          var pair = pairs[i],
+            keyval = pair.match(/(.*?)=(.*)/),
+            key = keyval[1],
+            val = keyval[2];
+          if (!val) continue;
+          if (key in hash) hash[key] += ',' + val;
+          else hash[key] = val;
+        }
+        return hash;
+      }
+
+      function alertError(e) {
+        var error = 'There was an error!\n';
+        if (e.cause) error += e.cause.status + "\n";
+        error += e.message;
+        alert(error);
+      }
+
+      function noop() { return arguments[0]; }
+
+      function iteratorCallback(mapFn) {
+        var callback, data, onLoad = noop;
+        if (!mapFn) mapFn = noop;
+        function each(cb) {
+          console.log("each");
+          callback = cb;
+          if (typeof(data) === 'undefined') return;
+          data.forEach(callback);
+        }
+        function load(d) {
+          console.log("load");
+          data = [];
+          var entries = d.feed.getEntries();
+          for (var i = 0, len = entries.length; i < len; ++i) {
+            data.push(mapFn(entries[i]));
+          }
+          data = onLoad(data);
+          if (typeof(callback) !== 'undefined') each(callback);
+        }
+        load.onLoad = function(fn) { onLoad = fn; }
+        load.each = each;
+        return load;
+      }
+
+      function accounts() {
+        var uri = 'https://www.google.com/analytics/feeds/accounts/default?max-results=50',
+          iterator = iteratorCallback(function(account) {
+            return { id: account.getTableId().getValue(), name: account.getTitle().getText() };
+          });
+        service.getAccountFeed(uri, iterator, alertError);
+        return iterator;
+      }
+
+      function loggedIn() {
+        return !!google.accounts.user.checkLogin(scope);
+      }
+
+      function logIn() {
+        google.accounts.user.login(scope);
+      }
+
+      function logOut() {
+        google.accounts.user.logout();
+      }
+
+      function refreshView() {
+        $('#query').html([
+          'start-date=2010-04-01',
+          'end-date=2010-04-30',
+          'dimensions=ga:previousPagePath,ga:pagePath',
+          'metrics=ga:pageviews',
+          'filters=ga:previousPagePath==/us/internet',
+          'sort=-ga:pageviews',
+          'max-results=10000'].join("\n"));
+        $('#filter').html('return data;')
+        if (loggedIn()) {
+          $('#authButton').html("Sign out");
+          accounts().each(function(account, i) {
+            $('#accounts').show();
+            $('#accounts').append(['<option value="',account.id,'">',account.name,'</option>'].join(''));
+          })
+        } else {
+          $('#authButton').html("Sign in");
+          $('#accounts').hide().html('');
+        }
+      }
+    });
+  </script>
+  <script>
+    /*
+     * JavaScript Pretty Date
+     * Copyright (c) 2008 John Resig (jquery.com)
+     * Licensed under the MIT license.
+     */
+
+    // Takes an ISO time and returns a string representing how
+    // long ago the date represents.
+    function prettyDate(time){
+      var date = new Date(Date.parse(time)),
+        diff = (((new Date()).getTime() - date.getTime()) / 1000),
+        day_diff = Math.floor(diff / 86400);
+
+      if ( isNaN(day_diff) || day_diff < 0 || day_diff >= 31 )
+        return;
+
+      return day_diff == 0 && (
+          diff < 60 && "just now" ||
+          diff < 120 && "a minute ago" ||
+          diff < 3600 && Math.floor(diff / 60) + " minutes ago" ||
+          diff < 7200 && "an hour ago" ||
+          diff < 86400 && Math.floor(diff / 3600) + " hours ago") ||
+        day_diff == 1 && "Yesterday" ||
+        day_diff < 7 && day_diff + " days ago" ||
+        day_diff < 31 && Math.ceil(day_diff / 7) + " weeks ago";
+        day_diff < 365 * 1.5 && "about " + Math.round(day_diff / 30) + " months ago" ||
+        day_diff < 365 * 2 && "over a year ago" ||
+        "over " + Math.floor(day_diff / 365) + " years ago";
+    }
+
+    // If jQuery is included in the page, adds a jQuery plugin to handle it as well
+    if (typeof jQuery != "undefined") {
+      jQuery.fn.prettyDate = function() {
+        return this.each(function() {
+          var el = jQuery(this),
+            originalDate = el.data('originalDate') || el.text(),
+            date = prettyDate(originalDate);
+
+          if (date) {
+            el.text(date);
+            el.data('originalDate', originalDate)
+          }
+        });
+      };
+    }
+  </script>
+</html>
